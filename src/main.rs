@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 const CSS: &str = include_str!("style.css");
 type Root = Arc<PathBuf>;
 mod export;
+mod ui_text;
 
 #[derive(ClapParser)]
 #[command(version, about)]
@@ -116,8 +117,11 @@ async fn index(State(root): State<Root>) -> Result<Html<String>, AppError> {
 }
 
 fn index_page(files: &[String], started: Instant, static_site: bool) -> String {
+    let home = ui_text::HomeText::default();
+
     let count = files.len();
     let mut rows = String::new();
+    let file_kind = escape(home.file_kind);
     for (number, file) in files.iter().enumerate() {
         let path = escape(file);
         let href = if static_site {
@@ -125,25 +129,41 @@ fn index_page(files: &[String], started: Instant, static_site: bool) -> String {
         } else {
             document_url(file)
         };
-        write!(rows, r#"<li><a class="file-row" href="{href}"><span class="file-number">{:02}</span><span class="file-name">{path}</span><span class="file-kind">Markdown</span><span class="file-arrow" aria-hidden="true">↗</span></a></li>"#, number + 1).unwrap();
+        write!(rows, r#"<li><a class="file-row" href="{href}"><span class="file-number">{:02}</span><span class="file-name">{path}</span><span class="file-kind">{file_kind}</span><span class="file-arrow" aria-hidden="true">↗</span></a></li>"#, number + 1).unwrap();
     }
     if files.is_empty() {
-        let message = if static_site {
-            "No Markdown documents were found in the source directory."
+        let message = escape(if static_site {
+            home.empty_export_message
         } else {
-            "Add a .md or .markdown file to this directory, then refresh to start reading."
-        };
-        write!(rows, r#"<li class="empty"><span class="empty-symbol" aria-hidden="true">＋</span><h3>A blank canvas.</h3><p>{message}</p></li>"#).unwrap();
+            home.empty_live_message
+        });
+        let title = escape(home.empty_title);
+        write!(rows, r#"<li class="empty"><span class="empty-symbol" aria-hidden="true">＋</span><h3>{title}</h3><p>{message}</p></li>"#).unwrap();
     }
-    let noun = if count == 1 { "document" } else { "documents" };
+    let noun = escape(if count == 1 {
+        home.document_singular
+    } else {
+        home.document_plural
+    });
+    let eyebrow = escape(home.eyebrow);
+    let [headline_first, headline_second, headline_accent] = home.headline.map(escape);
+    let [description_first, description_second] = home.description.map(escape);
+    let composition_label = escape(home.composition_label);
+    let composition_caption = escape(home.composition_caption);
+    let collection_title = escape(home.collection_title);
     let body = format!(
         r#"<section class="hero" aria-labelledby="hero-title">
-          <div class="hero-copy"><p class="eyebrow">A little order for your ideas</p><h1 id="hero-title">Words.<br>In good<br><span>form.</span></h1><p class="hero-description">Your Markdown, beautifully readable.<br>Pick a document and make yourself at home.</p></div>
-          <div class="composition" aria-hidden="true"><span class="composition-label">FORM / FUNCTION</span><div class="circle"></div><div class="square"></div><div class="triangle"></div><span class="composition-caption">THE READING ROOM — № 01</span></div>
+          <div class="hero-copy"><p class="eyebrow">{eyebrow}</p><h1 id="hero-title">{headline_first}<br>{headline_second}<br><span>{headline_accent}</span></h1><p class="hero-description">{description_first}<br>{description_second}</p></div>
+          <div class="composition" aria-hidden="true"><span class="composition-label">{composition_label}</span><div class="circle"></div><div class="square"></div><div class="triangle"></div><span class="composition-caption">{composition_caption}</span></div>
         </section>
-        <section class="library" aria-labelledby="library-title"><div class="section-heading"><h2 id="library-title">The collection<span class="red-dot" aria-hidden="true"></span></h2><span class="count">{count:02} {noun}</span></div><ol class="file-list">{rows}</ol></section>"#,
+        <section class="library" aria-labelledby="library-title"><div class="section-heading"><h2 id="library-title">{collection_title}<span class="red-dot" aria-hidden="true"></span></h2><span class="count">{count:02} {noun}</span></div><ol class="file-list">{rows}</ol></section>"#,
     );
-    page("The collection", &body, started, static_site.then_some(""))
+    page(
+        home.collection_title,
+        &body,
+        started,
+        static_site.then_some(""),
+    )
 }
 
 async fn document(
@@ -307,18 +327,28 @@ fn home_url(root_prefix: Option<&str>) -> String {
 }
 
 fn page(title: &str, body: &str, started: Instant, root_prefix: Option<&str>) -> String {
+    let site = ui_text::SiteText::default();
+
     let title = escape(title);
     let home = home_url(root_prefix);
     let stylesheet = root_prefix.map_or_else(
         || "/style.css".into(),
         |prefix| format!("{prefix}style.css"),
     );
+    let brand = escape(site.brand);
+    let brand_period = escape(site.brand_period);
+    let brand_home_label = escape(site.brand_home_label);
+    let title_brand = escape(site.title_brand);
+    let header_note = escape(site.header_note);
+    let skip_link = escape(site.skip_link);
+    let footer_text = escape(site.footer_text);
+    let footer_signature = escape(site.footer_signature);
     let mut output = format!(
-        r##"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{title} — Markhaus</title><link rel="icon" href="data:,"><link rel="stylesheet" href="{stylesheet}"></head><body><a class="skip-link" href="#main">Skip to content</a><div class="shell"><header class="site-header"><a class="brand" href="{home}" aria-label="Markhaus home"><span class="brand-mark" aria-hidden="true"></span>markhaus<span class="brand-period">.</span></a><span class="header-note">A SPACE FOR WORDS<span class="header-shapes" aria-hidden="true"><i></i><i></i><i></i></span></span></header><main id="main">{body}</main><footer class="site-footer"><span>Simple files. Considered form."##,
+        r##"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>{title} — {title_brand}</title><link rel="icon" href="data:,"><link rel="stylesheet" href="{stylesheet}"></head><body><a class="skip-link" href="#main">{skip_link}</a><div class="shell"><header class="site-header"><a class="brand" href="{home}" aria-label="{brand_home_label}"><span class="brand-mark" aria-hidden="true"></span>{brand}<span class="brand-period">{brand_period}</span></a><span class="header-note">{header_note}<span class="header-shapes" aria-hidden="true"><i></i><i></i><i></i></span></span></header><main id="main">{body}</main><footer class="site-footer"><span>{footer_text}"##,
     );
     // Measure after the document body and HTML shell have been generated.
     let milliseconds = started.elapsed().as_secs_f64() * 1000.0;
-    write!(output, r#"<span class="generation-time">Generated in {milliseconds:.2} ms</span></span><span class="footer-signature">MARKHAUS <span aria-hidden="true">↗</span></span></footer></div></body></html>"#).unwrap();
+    write!(output, r#"<span class="generation-time">Generated in {milliseconds:.2} ms</span></span><span class="footer-signature">{footer_signature} <span aria-hidden="true">↗</span></span></footer></div></body></html>"#).unwrap();
     output
 }
 
