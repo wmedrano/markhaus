@@ -167,3 +167,102 @@ async fn stylesheet_is_served_with_correct_content_type() {
     assert_eq!(headers[header::CONTENT_TYPE], "text/css; charset=utf-8");
     assert!(body.contains("@media (max-width: 620px)"));
 }
+
+#[test]
+fn static_export_renders_nested_pages_with_portable_navigation_and_markdown_links() {
+    let source = tempfile::tempdir().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let output = destination.path().join("site");
+    fs::create_dir(source.path().join("notes")).unwrap();
+    let special = "café & notes.md";
+    fs::write(source.path().join(special), "# Special document").unwrap();
+    fs::write(source.path().join("guide.md"), "# Guide").unwrap();
+    fs::write(source.path().join("guide.markdown"), "# Alternate guide").unwrap();
+    fs::write(source.path().join(".secret.md"), "Secret").unwrap();
+    fs::write(source.path().join("notes/nested.MD"), "# Nested\n\n[Guide](../guide.md?mode=read#main)\n\n[Root](/guide.markdown)\n\n[Reference][ref]\n\n[ref]: ../caf%C3%A9%20%26%20notes.md\n\n[External](https://example.com/guide.md)\n\n[Anchor](#main)\n\n<script>bad()</script>").unwrap();
+    let root = fs::canonicalize(source.path()).unwrap();
+    assert_eq!(export::write_site(&root, &output).unwrap(), 4);
+
+    let index = fs::read_to_string(output.join("index.html")).unwrap();
+    assert!(index.contains("04 documents"));
+    assert!(index.contains(&format!("href=\"read/{}.html\"", encoded_path(special))));
+    assert!(index.contains("href=\"style.css\""));
+    assert!(index.contains("href=\"index.html\""));
+    assert!(!index.contains(".secret.md"));
+    assert_eq!(fs::read_to_string(output.join("style.css")).unwrap(), CSS);
+    assert!(output.join("read/guide.md.html").is_file());
+    assert!(output.join("read/guide.markdown.html").is_file());
+    assert!(
+        output
+            .join("read")
+            .join(format!("{special}.html"))
+            .is_file()
+    );
+
+    let nested = fs::read_to_string(output.join("read/notes/nested.MD.html")).unwrap();
+    assert!(nested.contains("<h1>Nested</h1>"));
+    assert!(nested.contains("href=\"../../style.css\""));
+    assert!(nested.contains("href=\"../../index.html\""));
+    assert!(nested.contains("href=\"../guide.md.html?mode=read#main\""));
+    assert!(nested.contains("href=\"../../read/guide.markdown.html\""));
+    assert!(nested.contains("href=\"../caf%C3%A9%20%26%20notes.md.html\""));
+    assert!(nested.contains("href=\"https://example.com/guide.md\""));
+    assert!(nested.contains("href=\"#main\""));
+    assert!(nested.contains("Generated in "));
+    assert!(!nested.contains("<script"));
+}
+
+#[test]
+fn static_export_preserves_existing_output_and_rejects_unreadable_markdown() {
+    let source = tempfile::tempdir().unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(source.path()).unwrap();
+    fs::write(destination.path().join("index.html"), "Keep this").unwrap();
+    let error = export::write_site(&root, destination.path()).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        fs::read_to_string(destination.path().join("index.html")).unwrap(),
+        "Keep this"
+    );
+
+    fs::write(source.path().join("invalid.md"), [0xff, 0xfe]).unwrap();
+    let output = destination.path().join("new-site");
+    assert!(export::write_site(&root, &output).is_err());
+    assert!(!output.exists());
+}
+
+#[test]
+fn static_export_supports_empty_collections() {
+    let source = tempfile::tempdir().unwrap();
+    let output = source.path().join("site");
+    let root = fs::canonicalize(source.path()).unwrap();
+    assert_eq!(export::write_site(&root, &output).unwrap(), 0);
+    let index = fs::read_to_string(output.join("index.html")).unwrap();
+    assert!(index.contains("00 documents"));
+    assert!(index.contains("No Markdown documents were found"));
+    assert!(output.join("style.css").is_file());
+}
+
+#[test]
+fn cli_supports_directory_selection_for_serving_and_export() {
+    let defaults = Cli::try_parse_from(["markhaus"]).unwrap();
+    assert_eq!(defaults.addr, "127.0.0.1:5779");
+    assert_eq!(defaults.dir, PathBuf::from("."));
+    assert!(defaults.command.is_none());
+    for args in [
+        vec![
+            "markhaus", "--dir", "my notes", "export", "--output", "site",
+        ],
+        vec![
+            "markhaus", "export", "--dir", "my notes", "--output", "site",
+        ],
+    ] {
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(cli.dir, PathBuf::from("my notes"));
+        assert!(
+            matches!(cli.command, Some(Command::Export { output }) if output == FsPath::new("site"))
+        );
+    }
+    assert!(Cli::try_parse_from(["markhaus", "--dir"]).is_err());
+    assert!(Cli::try_parse_from(["markhaus", "export", "--output"]).is_err());
+}
